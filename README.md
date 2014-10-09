@@ -1,3 +1,9 @@
+LJ's change:
+=============
+Removed request bucket concept, now it can be access from any hostname, and leads to same resource folder.
+Originally, the target resource folders are different for the request `http://localhost:4567` and `http://127.0.0.1:4567`
+
+
 ## Introduction
 FakeS3 is a lightweight server that responds to the same calls Amazon S3 responds to.  
 It is extremely useful for testing of S3 in a sandbox environment without actually
