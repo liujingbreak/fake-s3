@@ -337,11 +337,11 @@ module FakeS3
       s_req = Request.new
       s_req.path = webrick_req.path
       s_req.is_path_style = true
-
-      if !@root_hostnames.include?(host)
-        s_req.bucket = host.split(".")[0]
-        s_req.is_path_style = false
-      end
+      puts "(-,-) !@root_hostnames = #{@root_hostnames}, host = #{host}"
+      #if !@root_hostnames.include?(host)
+      #  s_req.bucket = host.split(".")[0]
+      #  s_req.is_path_style = false
+      #end
 
       s_req.http_verb = webrick_req.request_method
 
