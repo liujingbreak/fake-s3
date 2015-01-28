@@ -1,5 +1,7 @@
 require 'time'
 require 'webrick'
+require 'webrick/https'
+require 'openssl'
 require 'fakes3/file_store'
 require 'fakes3/xml_adapter'
 require 'fakes3/bucket_query'
@@ -88,6 +90,21 @@ module FakeS3
           return
         end
 
+        if_none_match = request["If-None-Match"]
+        if if_none_match == "\"#{real_obj.md5}\"" or if_none_match == "*"
+          response.status = 304
+          return
+        end
+
+        if_modified_since = request["If-Modified-Since"]
+        if if_modified_since
+          time = Time.httpdate(if_modified_since)
+          if time >= Time.iso8601(real_obj.modified_date)
+            response.status = 304
+            return
+          end 
+        end
+
         response.status = 200
         response['Content-Type'] = real_obj.content_type
 
@@ -101,6 +118,10 @@ module FakeS3
         response.header['ETag'] = "\"#{real_obj.md5}\""
         response['Accept-Ranges'] = "bytes"
         response['Last-Ranges'] = "bytes"
+
+        real_obj.custom_metadata.each do |header, value|
+          response.header['x-amz-meta-' + header] = value
+        end
 
         content_length = stat.size
 
@@ -172,10 +193,10 @@ module FakeS3
       filename = 'default'
       filename = $1 if request.body =~ /filename="(.*)"/
       key=key.gsub('${filename}', filename)
-      
+
       bucket_obj = @store.get_bucket(s_req.bucket) || @store.create_bucket(s_req.bucket)
       real_obj=@store.store_object(bucket_obj, key, s_req.webrick_request)
-      
+
       response['Etag'] = "\"#{real_obj.md5}\""
       response.body = ""
       if success_action_redirect
@@ -213,11 +234,11 @@ module FakeS3
       response.status = 204
       response.body = ""
     end
-    
+
     def do_OPTIONS(request, response)
       super
       response["Access-Control-Allow-Origin"]="*"
-    end  
+    end
 
     private
 
@@ -323,7 +344,7 @@ module FakeS3
     def normalize_post(webrick_req,s_req)
       path = webrick_req.path
       path_len = path.size
-      
+
       s_req.path = webrick_req.query['key']
 
       s_req.webrick_request = webrick_req
@@ -374,15 +395,30 @@ module FakeS3
 
 
   class Server
-    def initialize(address,port,store,hostname)
+    def initialize(address,port,store,hostname,ssl_cert_path,ssl_key_path)
       @address = address
       @port = port
       @store = store
       @hostname = hostname
+      @ssl_cert_path = ssl_cert_path
+      @ssl_key_path = ssl_key_path
+      webrick_config = {
+        :BindAddress => @address,
+        :Port => @port
+      }
+      if !@ssl_cert_path.to_s.empty?
+        webrick_config.merge!(
+          {
+            :SSLEnable => true,
+            :SSLCertificate => OpenSSL::X509::Certificate.new(File.read(@ssl_cert_path)),
+            :SSLPrivateKey => OpenSSL::PKey::RSA.new(File.read(@ssl_key_path))
+          }
+        )
+      end
+      @server = WEBrick::HTTPServer.new(webrick_config)
     end
 
     def serve
-      @server = WEBrick::HTTPServer.new(:BindAddress => @address, :Port => @port)
       @server.mount "/", Servlet, @store,@hostname
       trap "INT" do @server.shutdown end
       @server.start

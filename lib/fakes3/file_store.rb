@@ -9,6 +9,11 @@ require 'yaml'
 module FakeS3
   class FileStore
     SHUCK_METADATA_DIR = ".fakes3_metadataFFF"
+    # S3 clients with overly strict date parsing fails to parse ISO 8601 dates
+    # without any sub second precision (e.g. jets3t v0.7.2), and the examples
+    # given in the official AWS S3 documentation specify three (3) decimals for
+    # sub second precision.
+    SUBSECOND_PRECISION = 3
 
     def initialize(root)
       @root = root
@@ -83,8 +88,11 @@ module FakeS3
         #real_obj.io = File.open(File.join(obj_root,"content"),'rb')
         real_obj.io = RateLimitableFile.open(File.join(obj_root,"content"),'rb')
         real_obj.size = metadata.fetch(:size) { 0 }
-        real_obj.creation_date = File.ctime(obj_root).utc.iso8601()
-        real_obj.modified_date = metadata.fetch(:modified_date) { File.mtime(File.join(obj_root,"content")).utc.iso8601() }
+        real_obj.creation_date = File.ctime(obj_root).utc.iso8601(SUBSECOND_PRECISION)
+        real_obj.modified_date = metadata.fetch(:modified_date) do
+          File.mtime(File.join(obj_root,"content")).utc.iso8601(SUBSECOND_PRECISION)
+        end
+        real_obj.custom_metadata = metadata.fetch(:custom_metadata) { {} }
         return real_obj
       rescue
         puts $!
@@ -146,7 +154,6 @@ module FakeS3
 
       src_obj = src_bucket.find(src_name)
       dst_bucket.add(obj)
-      src_bucket.remove(src_obj)
       return obj
     end
 
@@ -180,6 +187,7 @@ module FakeS3
           end
         end
         metadata_struct = create_metadata(content,request)
+
         File.open(metadata,'w') do |f|
           f << YAML::dump(metadata_struct)
         end
@@ -220,7 +228,16 @@ module FakeS3
       metadata[:content_type] = request.header["content-type"].first
       metadata[:content_encoding] = request.header["content-encoding"].first
       metadata[:size] = File.size(content)
-      metadata[:modified_date] = File.mtime(content).utc.iso8601()
+      metadata[:modified_date] = File.mtime(content).utc.iso8601(SUBSECOND_PRECISION)
+      metadata[:custom_metadata] = {}
+
+      # Add custom metadata from the request header
+      request.header.each do |key, value|
+        match = /^x-amz-meta-(.*)$/.match(key)
+        if match && (match_key = match[1])
+          metadata[:custom_metadata][match_key] = value.join(', ')
+        end
+      end
       return metadata
     end
   end
